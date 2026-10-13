@@ -1,0 +1,51 @@
+# This is a basic workflow to help you get started with Actions
+
+name: publish_to_google_play
+
+# Controls when the action will run. Triggers the workflow on push or pull request
+# events but only for the master branch
+on:
+  workflow_dispatch:
+    inputs:
+      releaseMessage:
+        description: 'release message'     
+        required: true
+        default: 'update apk'
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  build:
+    # The type of runner that the job will run on
+    runs-on: ubuntu-latest
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+
+    # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+    - name: checkout codes
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: '0' # 0 indicates all history, this is needed for git revision 
+
+    - name: Set up JDK 11
+      uses: actions/setup-java@v1
+      with:
+        java-version: '11'
+
+    - name: Assemble Release APK
+      run: ./gradlew assembleRelease --stacktrace
+  
+    - name: publish to google play
+      uses: r0adkll/upload-google-play@v1
+      with:
+        serviceAccountJsonPlainText: ${{  secrets.SERVICE_ACCOUNT_JSON }}
+        packageName: com.zfdang.jsmth_android
+        releaseFiles: app/build/outputs/apk/release/*.apk
+        track: production
+        inAppUpdatePriority: 2
+#         userFraction: 1.0
+#         whatsNewDirectory: distribution/whatsnew
+#         mappingFile: app/build/outputs/mapping/release/mapping.txt
+  
+  

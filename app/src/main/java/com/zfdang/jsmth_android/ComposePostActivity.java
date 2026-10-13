@@ -1,0 +1,585 @@
+package com.zfdang.jsmth_android;
+
+import android.content.DialogInterface;
+import android.content.Intent;
+import android.os.Bundle;
+import android.net.Uri;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.PickVisualMediaRequest;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.core.content.FileProvider;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.IOException;
+import java.util.List;
+import java.util.Locale;
+import androidx.appcompat.app.ActionBar;
+import androidx.appcompat.app.AlertDialog;
+import androidx.appcompat.widget.Toolbar;
+import android.text.Editable;
+import android.text.TextWatcher;
+import android.util.Log;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.view.View;
+import android.view.WindowManager;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.Switch;
+import android.widget.TextView;
+import android.widget.Toast;
+import com.zfdang.SMTHApplication;
+import com.zfdang.jsmth_android.helpers.KeyboardLess;
+import com.zfdang.jsmth_android.helpers.StringUtils;
+import com.zfdang.jsmth_android.models.ComposePostContext;
+import com.zfdang.jsmth_android.newsmth.AjaxResponse;
+import com.zfdang.jsmth_android.newsmth.SMTHHelper;
+import io.reactivex.Observable;
+import io.reactivex.Observer;
+import io.reactivex.android.schedulers.AndroidSchedulers;
+import io.reactivex.annotations.NonNull;
+import io.reactivex.disposables.Disposable;
+import io.reactivex.functions.Function;
+import io.reactivex.schedulers.Schedulers;
+import java.util.ArrayList;
+import okhttp3.MediaType;
+import okhttp3.RequestBody;
+
+public class ComposePostActivity extends SMTHBaseActivity {
+
+  public static final int COMPOSE_ACTIVITY_REQUEST_CODE = 107;
+  private static final String TAG = "ComposePostActivity";
+  private final String UPLOAD_TEMPLATE = " [upload=%d][/upload] ";
+
+  private Button mButton;
+  private LinearLayout mUserRow;
+  private EditText mUserID;
+  private EditText mTitle;
+  private LinearLayout mAttachRow;
+  private EditText mAttachments;
+  private Switch mCompress;
+  private EditText mContent;
+  private ArrayList<String> mPhotos;
+  private TextView mContentCount;
+
+  private ComposePostContext mPostContext;
+
+  // used to show progress while publishing
+  private static int totalSteps = 1;
+  private static int currentStep = 1;
+
+  private int postPublishResult = 0;
+  private String postPublishMessage = null;
+  private AjaxResponse lastResponse = null;
+
+  private File cameraAttachment;
+  private boolean importingImages;
+  private boolean reportSending;
+  private final ActivityResultLauncher<PickVisualMediaRequest> imagePicker =
+      registerForActivityResult(new ActivityResultContracts.PickMultipleVisualMedia(5), this::importImages);
+  private final ActivityResultLauncher<Uri> cameraPicker =
+      registerForActivityResult(new ActivityResultContracts.TakePicture(), saved -> {
+        if (saved && cameraAttachment != null) addAttachment(cameraAttachment.getAbsolutePath());
+        else if (cameraAttachment != null) cameraAttachment.delete();
+        cameraAttachment = null;
+      });
+
+  public void startImageSelector() {
+    new AlertDialog.Builder(this).setTitle("图片附件（最多5张）")
+        .setItems(new String[]{"从相册添加", "拍照添加", "清空附件"}, (dialog, choice) -> {
+          if (choice == 2) {
+            String content = mContent.getText().toString();
+            for (int i = 1; i <= mPhotos.size(); i++) {
+              content = content.replace(String.format(Locale.ROOT, UPLOAD_TEMPLATE, i), "");
+            }
+            mContent.setText(content);
+            mContent.setSelection(content.length());
+            mPhotos.clear();
+            mAttachments.setText("共有0个附件");
+          } else if (mPhotos.size() >= 5) {
+            Toast.makeText(this, "最多添加5张图片，请先清空附件再选择", Toast.LENGTH_LONG).show();
+          } else if (choice == 0) {
+            imagePicker.launch(new PickVisualMediaRequest.Builder()
+                .setMediaType(ActivityResultContracts.PickVisualMedia.ImageOnly.INSTANCE).build());
+          } else {
+            try {
+              File directory = new File(getCacheDir(), "attachments");
+              if (!directory.exists() && !directory.mkdirs()) throw new IOException("Cannot create attachment directory");
+              cameraAttachment = File.createTempFile("camera-", ".jpg", directory);
+              cameraPicker.launch(FileProvider.getUriForFile(this, getPackageName() + ".attachments", cameraAttachment));
+            } catch (IOException | RuntimeException error) {
+              if (cameraAttachment != null) cameraAttachment.delete();
+              cameraAttachment = null;
+              Toast.makeText(this, "无法打开相机，请从相册选择图片", Toast.LENGTH_LONG).show();
+            }
+          }
+        }).setNegativeButton("取消", null).show();
+  }
+
+  private void importImages(List<Uri> images) {
+    if (images.isEmpty()) return;
+    final int remaining = 5 - mPhotos.size();
+    importingImages = true;
+    mButton.setEnabled(false);
+    new Thread(() -> {
+      ArrayList<String> imported = new ArrayList<>();
+      boolean failed = false;
+      File directory = new File(getCacheDir(), "attachments");
+      for (Uri image : images.subList(0, Math.min(remaining, images.size()))) {
+        File attachment = null;
+        try {
+          if (!directory.exists() && !directory.mkdirs()) throw new IOException("Cannot create attachment directory");
+          String extension = "image/gif".equals(getContentResolver().getType(image)) ? ".gif" : ".jpg";
+          attachment = File.createTempFile("image-", extension, directory);
+          try (InputStream input = getContentResolver().openInputStream(image);
+               FileOutputStream output = new FileOutputStream(attachment)) {
+            if (input == null) throw new IOException("Cannot open selected image");
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+          }
+          if (attachment.length() == 0) throw new IOException("Empty image");
+          imported.add(attachment.getAbsolutePath());
+        } catch (IOException | RuntimeException error) {
+          if (attachment != null) attachment.delete();
+          failed = true;
+        }
+      }
+      final boolean showError = failed;
+      runOnUiThread(() -> {
+        if (isFinishing() || isDestroyed()) return;
+        for (String filename : imported) addAttachment(filename);
+        importingImages = false;
+        mButton.setEnabled(true);
+        if (showError) Toast.makeText(this, "部分图片读取失败，请重新选择", Toast.LENGTH_LONG).show();
+        if (images.size() > remaining) Toast.makeText(this, "最多5个附件，已保留前" + remaining + "张图片", Toast.LENGTH_LONG).show();
+      });
+    }, "attachment-import").start();
+  }
+
+  private void addAttachment(String filename) {
+    if (mPhotos.size() >= 5) return;
+    mPhotos.add(filename);
+    mAttachments.setText(String.format("共有%d个附件", mPhotos.size()));
+    mContent.getText().insert(Math.max(0, mContent.getSelectionStart()), String.format(Locale.ROOT, UPLOAD_TEMPLATE, mPhotos.size()));
+  }
+
+  @Override protected void onSaveInstanceState(Bundle outState) {
+    outState.putStringArrayList("attachments", mPhotos);
+    if (cameraAttachment != null) outState.putString("cameraAttachment", cameraAttachment.getAbsolutePath());
+    super.onSaveInstanceState(outState);
+  }
+
+  @Override protected void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+    getOnBackPressedDispatcher().addCallback(this, new androidx.activity.OnBackPressedCallback(true) {
+      @Override public void handleOnBackPressed() { handleBackAction(); }
+    });
+    setContentView(R.layout.activity_compose_post);
+
+    Toolbar toolbar = findViewById(R.id.toolbar);
+    setSupportActionBar(toolbar);
+
+    ActionBar bar = getSupportActionBar();
+    if (bar != null) {
+      bar.setDisplayHomeAsUpEnabled(true);
+    }
+
+    mPhotos = savedInstanceState == null ? new ArrayList<>() : savedInstanceState.getStringArrayList("attachments");
+    if (mPhotos == null) mPhotos = new ArrayList<>();
+    if (savedInstanceState != null && savedInstanceState.containsKey("cameraAttachment")) {
+      cameraAttachment = new File(savedInstanceState.getString("cameraAttachment"));
+    }
+
+    mUserRow = findViewById(R.id.compose_post_userid_row);
+    mUserID = findViewById(R.id.compose_post_userid);
+    mTitle = findViewById(R.id.compose_post_title);
+    mAttachRow = findViewById(R.id.compose_post_attach_row);
+    mAttachments = findViewById(R.id.compose_post_attach);
+    mAttachments.setText(String.format("共有%d个附件", mPhotos.size()));
+    mCompress = findViewById(R.id.compose_post_attach_switch);
+    mContent = findViewById(R.id.compose_post_content);
+    mContentCount = findViewById(R.id.compose_post_content_label);
+
+    mButton = findViewById(R.id.compose_post_attach_button);
+    mButton.setOnClickListener(new View.OnClickListener() {
+      @Override public void onClick(View v) {
+        KeyboardLess.$hide(v.getContext(), mContent);
+        startImageSelector();
+      }
+    });
+
+    mContent.addTextChangedListener(new TextWatcher() {
+      @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+      }
+
+      @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+      }
+
+      @Override public void afterTextChanged(Editable s) {
+        mContentCount.setText(String.format("文章字数:%d", s.length()));
+      }
+    });
+
+    // init controls from Intent
+    initFromIntent();
+
+    restorePostContentFromCache();
+
+    // open keypads
+    KeyboardLess.$show(this, mContent);
+  }
+
+  // three methods to manage content cache
+  private void restorePostContentFromCache() {
+    if (isChildSafetyReport()) return;
+    final String content = Settings.getInstance().getPostCache();
+    if (content != null && content.length() > 0 && content.length() != mContent.getText().toString().length()) {
+      AlertDialog.Builder alertDialogBuilder = new AlertDialog.Builder(ComposePostActivity.this);
+      alertDialogBuilder.setTitle("恢复缓存的内容?")
+          .setMessage(StringUtils.getEllipsizedMidString(content, 240))
+          .setCancelable(false)
+          .setPositiveButton("恢复内容", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int id) {
+              // if this button is clicked, close current activity
+              mContent.setText(content);
+            }
+          })
+          .setNegativeButton("放弃内容", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int id) {
+              // if this button is clicked, just close the dialog box and do nothing
+              dialog.cancel();
+            }
+          })
+          .create()
+          .show();
+    }
+  }
+
+  private void savePostContentToCache() {
+    if (isChildSafetyReport()) return;
+    String content = mContent.getText().toString();
+    Settings.getInstance().setPostCache(content);
+  }
+
+  private void clearPostContentCache() {
+    if (!isChildSafetyReport()) Settings.getInstance().setPostCache("");
+  }
+
+  @Override protected void onPause() {
+    // this method will also be called after activity.finish(), so we will have to set mContent.SetText("") before .finish()
+    super.onPause();
+    savePostContentToCache();
+  }
+
+  public void initFromIntent() {
+    // get ComposePostContext from caller
+    Intent intent = getIntent();
+    mPostContext = intent.getParcelableExtra(SMTHApplication.COMPOSE_POST_CONTEXT);
+    assert mPostContext != null;
+    //        Log.d(TAG, "initFromIntent: " + mPostContext.toString());
+
+    // there are totally 5 different cases: ( 3 & 4 can be handled in the same way)
+    // 1. new post:   invalid post && !isThroughMail
+    // 2. reply post: valid post && !isThroughMail
+    // 3. reply post through mail: valid post && isThroughMail
+    // 4. reply mail: valid post && isThroughMail
+    // 5. write new mail: invalid post && isThroughMail
+
+    // set title, hide userRow / attachRow if necessary
+    if (mPostContext.getComposingMode() == ComposePostContext.MODE_NEW_POST) {
+      mUserRow.setVisibility(View.GONE);
+      setTitle(String.format("发表文章@%s", mPostContext.getBoardEngName()));
+      // set focus to title
+      mTitle.requestFocus();
+    } else if (mPostContext.getComposingMode() == ComposePostContext.MODE_REPLY_POST) {
+      mUserRow.setVisibility(View.GONE);
+      setTitle(String.format("回复文章@%s", mPostContext.getBoardEngName()));
+      // set focus to content
+      mContent.requestFocus();
+      getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
+    } else if (mPostContext.getComposingMode() == ComposePostContext.MODE_EDIT_POST) {
+      mUserRow.setVisibility(View.GONE);
+      mAttachRow.setVisibility(View.GONE);
+      setTitle(String.format("修改文章@%s", mPostContext.getBoardEngName()));
+      // set focus to content
+      mContent.requestFocus();
+      getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
+    } else if (mPostContext.getComposingMode() == ComposePostContext.MODE_NEW_MAIL) {
+      mAttachRow.setVisibility(View.GONE);
+      setTitle("写新信件");
+      // set focus to recipient
+      mUserID.requestFocus();
+    } else if (mPostContext.getComposingMode() == ComposePostContext.MODE_NEW_MAIL_TO_USER) {
+      mAttachRow.setVisibility(View.GONE);
+      setTitle("写新信件");
+      mUserID.setText(mPostContext.getPostAuthor());
+      mUserID.setEnabled(false);
+      // set focus to content
+      mContent.requestFocus();
+    } else if (mPostContext.getComposingMode() == ComposePostContext.MODE_REPLY_MAIL) {
+      mAttachRow.setVisibility(View.GONE);
+      setTitle("回复信件");
+      mUserID.setText(mPostContext.getPostAuthor());
+      mUserID.setEnabled(false);
+      // set focus to content
+      mContent.requestFocus();
+      getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
+    }
+
+    if (isChildSafetyReport()) {
+      mAttachRow.setVisibility(View.GONE);
+      setTitle(R.string.child_safety_report_action);
+      mUserID.setText("sysop");
+      mUserID.setEnabled(false);
+      mTitle.setText(R.string.child_safety_report_subject);
+      mTitle.setEnabled(false);
+      mContent.setText(mPostContext.getPostContent());
+      mContent.setHint(R.string.child_safety_report_hint);
+      mContent.requestFocus();
+      return;
+    }
+
+    // set post title & content
+    if (mPostContext.isValidPost()) {
+      // have valid post information
+      if (mPostContext.getComposingMode() == ComposePostContext.MODE_EDIT_POST) {
+        mTitle.setText(mPostContext.getPostTitle());
+        mContent.setText(mPostContext.getPostContent());
+      } else {
+        String title = mPostContext.getPostTitle();
+        if (title != null && !title.startsWith("Re:")) {
+          title = String.format("Re: %s", title);
+        }
+        mTitle.setText(title);
+
+        String[] lines = mPostContext.getPostContent().split("\n");
+        StringBuilder wordList = new StringBuilder();
+        wordList.append("\n\n");
+        wordList.append(String.format("【 在 %s 的大作中提到: 】", mPostContext.getPostAuthor())).append("\n");
+        for (int i = 0; i < lines.length && i < 5; i++) {
+          if (lines[i].startsWith("--")) {
+            // this might be the start of signature, ignore following lines in quote
+            break;
+          }
+          wordList.append(String.format(": %s", lines[i])).append("\n");
+        }
+        mContent.setText(new String(wordList));
+      }
+
+      // if the content is not empty, set cursor to the beginning
+      mContent.setSelection(0);
+    }
+  }
+
+  @Override public boolean onCreateOptionsMenu(Menu menu) {
+    getMenuInflater().inflate(R.menu.compose_post_menu, menu);
+    return super.onCreateOptionsMenu(menu);
+  }
+
+  private void handleBackAction() {
+    onBackAction();
+  }
+
+  @Override public boolean onOptionsItemSelected(MenuItem item) {
+    int code = item.getItemId();
+    if (code == android.R.id.home) {
+      onBackAction();
+    } else if (code == R.id.compose_post_publish) {
+      publishPost();
+    }
+    return super.onOptionsItemSelected(item);
+  }
+
+  public static class BytesContainer {
+    public String filename;
+    public byte[] bytes;
+
+    public BytesContainer(String filename, byte[] bytes) {
+      this.bytes = bytes;
+      this.filename = filename;
+    }
+  }
+
+  private boolean isChildSafetyReport() {
+    return mPostContext != null
+        && mPostContext.getComposingMode() == ComposePostContext.MODE_CHILD_SAFETY_REPORT;
+  }
+
+  public void publishPost() {
+    if (isChildSafetyReport() && reportSending) return;
+    if (isChildSafetyReport() && mContent.getText().toString().trim().isEmpty()) {
+      mContent.setError(getString(R.string.child_safety_report_hint));
+      mContent.requestFocus();
+      return;
+    }
+    if (isChildSafetyReport()
+        && (!Settings.getInstance().isUserOnline() || !Settings.getInstance().isLastLoginSuccess())) {
+      new AlertDialog.Builder(this)
+          .setMessage(R.string.child_safety_login_required)
+          .setPositiveButton(R.string.action_login,
+              (dialog, which) -> startActivity(new Intent(this, LoginActivity.class)))
+          .setNegativeButton(android.R.string.cancel, null).show();
+      return;
+    }
+    if (importingImages) {
+      Toast.makeText(this, "正在读取图片，请稍候", Toast.LENGTH_SHORT).show();
+      return;
+    }
+
+    reportSending = isChildSafetyReport();
+    postPublishResult = AjaxResponse.AJAX_RESULT_OK;
+    postPublishMessage = "";
+    lastResponse = null;
+
+    final String progressHint = isChildSafetyReport() ? "提交举报中(%d/%d)..." : "发表文章中(%d/%d)...";
+    ComposePostActivity.totalSteps = 1;
+    ComposePostActivity.currentStep = 1;
+    if (mPhotos != null) {
+      ComposePostActivity.totalSteps += mPhotos.size();
+    }
+
+    showProgress(String.format(progressHint, ComposePostActivity.currentStep, ComposePostActivity.totalSteps));
+
+    final SMTHHelper helper = SMTHHelper.getInstance();
+
+    // update attachments
+    final boolean bCompress = this.mCompress.isChecked();
+    Observable<AjaxResponse> resp1 = Observable.fromIterable(mPhotos).map(new Function<String, BytesContainer>() {
+      @Override public BytesContainer apply(@NonNull String filename) throws Exception {
+        byte[] bytes = SMTHHelper.getBitmapBytesWithResize(filename, bCompress);
+        return new BytesContainer(filename, bytes);
+      }
+    }).map(new Function<BytesContainer, AjaxResponse>() {
+      @Override public AjaxResponse apply(@NonNull BytesContainer container) throws Exception {
+        RequestBody requestBody = RequestBody.create(MediaType.parse("image/jpeg"), container.bytes);
+        AjaxResponse resp =
+            helper.wService.uploadAttachment(mPostContext.getBoardEngName(), StringUtils.getLastStringSegment(container.filename),
+                requestBody).blockingFirst();
+        if (resp != null) {
+          return resp;
+        } else {
+          Log.d(TAG, "call: " + "failed to upload attachment " + container.filename);
+          return null;
+        }
+      }
+    });
+
+    // publish post
+    String postContent = mContent.getText().toString();
+    if (!isChildSafetyReport() && Settings.getInstance().bUseSignature()) {
+      postContent += "\n" + String.format("#发自jSMTH@%s", Settings.getInstance().getSignature());
+    }
+    Observable<AjaxResponse> resp2 = null;
+    if (isChildSafetyReport() || mPostContext.getComposingMode() == ComposePostContext.MODE_NEW_MAIL
+        || mPostContext.getComposingMode() == ComposePostContext.MODE_NEW_MAIL_TO_USER
+        || mPostContext.getComposingMode() == ComposePostContext.MODE_REPLY_MAIL) {
+      String userid = isChildSafetyReport() ? "sysop" : mUserID.getText().toString().trim();
+      resp2 = SMTHHelper.sendMail(userid, mTitle.getText().toString(), postContent);
+    } else if (mPostContext.getComposingMode() == ComposePostContext.MODE_NEW_POST
+        || mPostContext.getComposingMode() == ComposePostContext.MODE_REPLY_POST) {
+      resp2 =
+          SMTHHelper.publishPost(mPostContext.getBoardEngName(), mTitle.getText().toString(), postContent, "0", mPostContext.getPostId());
+    } else if (mPostContext.getComposingMode() == ComposePostContext.MODE_EDIT_POST) {
+      postContent = mContent.getText().toString();
+      if (Settings.getInstance().bUseSignature()) {
+        postContent += "\n" + String.format("#修改自jSMTH@%s", Settings.getInstance().getSignature());
+      }
+      resp2 = SMTHHelper.editPost(mPostContext.getBoardEngName(), mPostContext.getPostId(), mTitle.getText().toString(), postContent);
+    }
+
+    // process all these tasks one by one
+    Observable.concat(resp1, resp2)
+        .subscribeOn(Schedulers.io())
+        .observeOn(AndroidSchedulers.mainThread())
+        .subscribe(new Observer<AjaxResponse>() {
+          @Override public void onSubscribe(@NonNull Disposable disposable) {
+            mDisposable.add(disposable);
+          }
+
+          @Override public void onNext(@NonNull AjaxResponse ajaxResponse) {
+            Log.d(TAG, "onNext: " + ajaxResponse.toString());
+            if (ajaxResponse.getAjax_st() != AjaxResponse.AJAX_RESULT_OK) {
+              postPublishResult = AjaxResponse.AJAX_RESULT_FAILED;
+              postPublishMessage += ajaxResponse.getAjax_msg() + "\n";
+            }
+            lastResponse = ajaxResponse;
+            ComposePostActivity.currentStep++;
+            showProgress(String.format(progressHint, ComposePostActivity.currentStep, ComposePostActivity.totalSteps));
+          }
+
+          @Override public void onError(@NonNull Throwable e) {
+            reportSending = false;
+            dismissProgress();
+            Toast.makeText(SMTHApplication.getAppContext(), "发生错误:\n" + e.toString(), Toast.LENGTH_LONG).show();
+
+          }
+
+          @Override public void onComplete() {
+            reportSending = false;
+            dismissProgress();
+            if (isChildSafetyReport() && lastResponse == null) {
+              postPublishResult = AjaxResponse.AJAX_RESULT_FAILED;
+              postPublishMessage = "未收到服务器确认，请检查发件箱后再重试。";
+            }
+            if (isChildSafetyReport() && lastResponse != null
+                && lastResponse.getAjax_msg() != null
+                && lastResponse.getAjax_msg().contains("本文可能含有不当内容")) {
+              postPublishResult = AjaxResponse.AJAX_RESULT_FAILED;
+              postPublishMessage = lastResponse.getAjax_msg();
+            }
+
+            String message;
+            if (postPublishResult != AjaxResponse.AJAX_RESULT_OK) {
+              message = "操作失败! \n错误信息:\n" + postPublishMessage;
+              Toast.makeText(ComposePostActivity.this, message, Toast.LENGTH_LONG).show();
+            } else {
+              if (lastResponse != null) {
+                // if we have valid last response, use the message.
+                message = lastResponse.getAjax_msg();
+              } else {
+                // otherwise, compose the message by ourself
+                message = "成功!";
+              }
+              if (isChildSafetyReport()) message = getString(R.string.child_safety_report_success);
+              Toast.makeText(SMTHApplication.getAppContext(), message, Toast.LENGTH_LONG).show();
+
+              KeyboardLess.$hide(ComposePostActivity.this, mContent);
+
+              if (message != null && !message.contains("本文可能含有不当内容")) {
+                mContent.setText("");
+                clearPostContentCache();
+                ComposePostActivity.this.finish();
+              }
+            }
+
+          }
+        });
+  }
+
+  public void onBackAction() {
+    AlertDialog.Builder alertDialogBuilder = new AlertDialog.Builder(ComposePostActivity.this);
+    alertDialogBuilder.setTitle("退出确认")
+        .setMessage("结束编辑，或者停留在当前界面继续编辑？")
+        .setCancelable(false)
+        .setPositiveButton("结束编辑", new DialogInterface.OnClickListener() {
+          public void onClick(DialogInterface dialog, int id) {
+            // if this button is clicked, close current activity
+            KeyboardLess.$hide(ComposePostActivity.this, mContent);
+            mContent.setText("");
+            clearPostContentCache();
+            ComposePostActivity.this.finish();
+          }
+        })
+        .setNegativeButton("继续编辑", new DialogInterface.OnClickListener() {
+          public void onClick(DialogInterface dialog, int id) {
+            // if this button is clicked, just close the dialog box and do nothing
+            dialog.cancel();
+          }
+        })
+        .create()
+        .show();
+  }
+}
