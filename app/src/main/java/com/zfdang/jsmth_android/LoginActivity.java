@@ -146,7 +146,14 @@ public class LoginActivity extends SMTHBaseActivity implements OnClickListener {
 //      Log.d(TAG, "receive login result");
       if (resultCode == RESULT_OK) {
         Toast.makeText(getApplicationContext(), "登录成功!", Toast.LENGTH_SHORT).show();
+        // WebView login does not go through ajax_login. Remember it so the
+        // status worker keeps this session instead of treating the user as guest.
+        Settings.getInstance().setUserOnline(true);
+        Settings.getInstance().setLastLoginSuccess(true);
         Intent resultIntent = new Intent();
+        if (data != null && data.getStringExtra(USERNAME) != null) {
+          resultIntent.putExtra(USERNAME, data.getStringExtra(USERNAME));
+        }
         setResult(Activity.RESULT_OK, resultIntent);
         finish();
       }

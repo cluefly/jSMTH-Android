@@ -61,6 +61,7 @@ import com.zfdang.jsmth_android.models.MailListContent;
 import com.zfdang.jsmth_android.models.Topic;
 import com.zfdang.jsmth_android.newsmth.AjaxResponse;
 import com.zfdang.jsmth_android.newsmth.SMTHHelper;
+import com.zfdang.jsmth_android.newsmth.UserStatus;
 import com.zfdang.jsmth_android.services.KeepAliveService;
 import com.zfdang.jsmth_android.services.MaintainUserStatusWorker;
 import com.zfdang.jsmth_android.services.UserStatusReceiver;
@@ -199,7 +200,9 @@ public class MainActivity extends SMTHBaseActivity
     WorkManager.getInstance(getApplicationContext())
             .enqueueUniqueWork(MaintainUserStatusWorker.WORKER_ID, ExistingWorkPolicy.KEEP,userStatusWorkRequest);
 
-    // run the background service now
+    // Cookie is enough to show the account. ajax_session is fetched afterwards
+    // and may be blocked without invalidating this session.
+    applyCookieLogin();
     updateUserStatusNow();
     UpdateNavigationViewHeader();
 
@@ -443,6 +446,22 @@ public class MainActivity extends SMTHBaseActivity
 //    Log.d(TAG, "receive login result, requestCode = " + requestCode);
     if (requestCode == LOGIN_ACTIVITY_REQUEST_CODE) {
 //      Log.d(TAG, "receive login result, resultCode = " + resultCode);
+      if (resultCode == RESULT_OK) {
+        String id = data != null ? data.getStringExtra(LoginActivity.USERNAME) : null;
+        if (id == null || id.isEmpty()) {
+          id = WebviewCookieHandler.readLoginUserId();
+        }
+        if (id != null && !id.isEmpty()) {
+          UserStatus status = new UserStatus();
+          status.setId(id);
+          status.setIs_login(true);
+          SMTHApplication.activeUser = status;
+          UpdateNavigationViewHeader();
+        } else {
+          applyCookieLogin();
+          UpdateNavigationViewHeader();
+        }
+      }
       updateUserStatusNow();
     }
   }
@@ -458,6 +477,20 @@ public class MainActivity extends SMTHBaseActivity
       logout.setVisible(false);
     }
     return super.onPrepareOptionsMenu(menu);
+  }
+
+  private void applyCookieLogin() {
+    String id = WebviewCookieHandler.readLoginUserId();
+    if (id == null) {
+      return;
+    }
+    if (SMTHApplication.isValidUser() && id.equals(SMTHApplication.activeUser.getId())) {
+      return;
+    }
+    UserStatus status = new UserStatus();
+    status.setId(id);
+    status.setIs_login(true);
+    SMTHApplication.activeUser = status;
   }
 
   // update header view in navigation header
@@ -620,6 +653,8 @@ public class MainActivity extends SMTHBaseActivity
 
   public void onLogout() {
     Settings.getInstance().setUserOnline(false);
+    Settings.getInstance().setLastLoginSuccess(false);
+    WebviewCookieHandler.clearLoginCookies();
     if (SMTHApplication.activeUser != null) {
       SMTHApplication.activeUser.setId("guest");
     }

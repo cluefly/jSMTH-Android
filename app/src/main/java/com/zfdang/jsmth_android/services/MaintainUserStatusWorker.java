@@ -17,6 +17,7 @@ import androidx.work.WorkerParameters;
 
 import com.zfdang.SMTHApplication;
 import com.zfdang.jsmth_android.Settings;
+import com.zfdang.jsmth_android.WebviewCookieHandler;
 import com.zfdang.jsmth_android.helpers.MakeList;
 import com.zfdang.jsmth_android.newsmth.AjaxResponse;
 import com.zfdang.jsmth_android.newsmth.SMTHHelper;
@@ -78,7 +79,15 @@ public class MaintainUserStatusWorker extends Worker {
         final SMTHHelper helper = SMTHHelper.getInstance();
 
         //Log.d(TAG, "1.0 get current UserStatus from remote");
-        helper.wService.queryActiveUserStatus().map(new Function<UserStatus, UserStatus>() {
+        helper.wService.queryActiveUserStatus()
+                .onErrorReturn(error -> {
+                    // ajax_session.json answers 403 HTML ("IP已被封禁") or 500 while the
+                    // WebView session cookie is still valid. Same fallback as the public
+                    // nForum userscript: identity comes from main[UTMPUSERID].
+                    Log.w(TAG, "ajax_session failed: " + error.getClass().getSimpleName());
+                    return userStatusFromCookie();
+                })
+                .map(new Function<UserStatus, UserStatus>() {
             @Override
             public UserStatus apply(UserStatus userStatus) throws Exception {
 //                Log.d(TAG, "2.0 " + userStatus.toString());
@@ -87,9 +96,15 @@ public class MaintainUserStatusWorker extends Worker {
                     userStatus = new UserStatus();
                 }
 
-                // set id to guest if it is null
-                if (userStatus.getId() == null) {
-                    userStatus.setId("guest");
+                // ajax_session may return guest even after WebView login.
+                if (userStatus.getId() == null || TextUtils.equals(userStatus.getId(), "guest")) {
+                    String cookieId = WebviewCookieHandler.readLoginUserId();
+                    if (cookieId != null) {
+                        userStatus.setId(cookieId);
+                        userStatus.setIs_login(true);
+                    } else if (userStatus.getId() == null) {
+                        userStatus.setId("guest");
+                    }
                 }
 
                 //Log.d(TAG, "call: " + "2.2 user not logined, try to login now...");
@@ -149,13 +164,24 @@ public class MaintainUserStatusWorker extends Worker {
                 // try to find new UserStatus only when login success
                 if (bLoginSuccess) {
                     //Log.d(TAG, "call: " + "2.2.5.1 try to get userstatus again after login action");
-                    UserStatus stat = SMTHHelper.queryActiveUserStatus().blockingFirst();
-                    //Log.d(TAG, "call: " + stats.size());
+                    UserStatus stat;
+                    try {
+                        stat = SMTHHelper.queryActiveUserStatus().blockingFirst();
+                    } catch (Exception sessionError) {
+                        Log.w(TAG, "post-login session failed: " + sessionError.getClass().getSimpleName());
+                        stat = userStatusFromCookie();
+                    }
                     if (stat == null) {
                         stat = new UserStatus();
                     }
-                    if (stat.getId() == null) {
-                        stat.setId("guest");
+                    if (stat.getId() == null || TextUtils.equals(stat.getId(), "guest")) {
+                        String cookieId = WebviewCookieHandler.readLoginUserId();
+                        if (cookieId != null) {
+                            stat.setId(cookieId);
+                            stat.setIs_login(true);
+                        } else if (stat.getId() == null) {
+                            stat.setId("guest");
+                        }
                     }
                     return stat;
                 } else {
@@ -175,9 +201,13 @@ public class MaintainUserStatusWorker extends Worker {
                     } else {
                         // get correct faceURL
                         //Log.d(TAG, "call: " + "3.2 New user is different with cached user, get real face URL from remote");
-                        UserInfo userInfo = helper.wService.queryUserInformation(userStatus.getId()).blockingFirst();
-                        if (userInfo != null) {
-                            userStatus.setFace_url(userInfo.getFace_url());
+                        try {
+                            UserInfo userInfo = helper.wService.queryUserInformation(userStatus.getId()).blockingFirst();
+                            if (userInfo != null) {
+                                userStatus.setFace_url(userInfo.getFace_url());
+                            }
+                        } catch (Exception faceError) {
+                            Log.w(TAG, "face lookup skipped: " + faceError.getClass().getSimpleName());
                         }
                     }
                 } else {
@@ -229,6 +259,19 @@ public class MaintainUserStatusWorker extends Worker {
             public void onComplete() {
             }
         });
+    }
+
+    private static UserStatus userStatusFromCookie() {
+        UserStatus status = new UserStatus();
+        String cookieId = WebviewCookieHandler.readLoginUserId();
+        if (cookieId != null) {
+            status.setId(cookieId);
+            status.setIs_login(true);
+        } else {
+            status.setId("guest");
+            status.setIs_login(false);
+        }
+        return status;
     }
 
     public String getNotificationMessage(UserStatus userStatus) {
