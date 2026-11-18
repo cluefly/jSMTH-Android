@@ -95,8 +95,17 @@ public class MaintainUserStatusWorker extends Worker {
                 if (userStatus == null) {
                     userStatus = new UserStatus();
                 }
-                if (userStatus.getId() == null) {
-                    userStatus.setId("guest");
+
+                // ajax_session may return guest even after WebView login.
+                // Only keep the cookie identity when the mobile session is not expired.
+                if (userStatus.getId() == null || TextUtils.equals(userStatus.getId(), "guest")) {
+                    String cookieId = WebviewCookieHandler.readLoginUserId();
+                    if (cookieId != null && isWebSessionValid(helper)) {
+                        userStatus.setId(cookieId);
+                        userStatus.setIs_login(true);
+                    } else if (userStatus.getId() == null) {
+                        userStatus.setId("guest");
+                    }
                 }
 
                 //Log.d(TAG, "call: " + "2.2 user not logined, try to login now...");
@@ -268,6 +277,35 @@ public class MaintainUserStatusWorker extends Worker {
             public void onComplete() {
             }
         });
+    }
+
+    private static boolean isWebSessionValid(SMTHHelper helper) {
+        okhttp3.Request request = new okhttp3.Request.Builder()
+                .url(SMTHHelper.SMTH_MOBILE_URL + "/index")
+                .header("Cache-Control", "no-cache")
+                .build();
+        try (okhttp3.Response response = helper.mHttpClient.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                return true;
+            }
+            String html = response.body().string();
+            return !isMobileSessionExpired(html);
+        } catch (Exception e) {
+            Log.w(TAG, "mobile session check failed: " + e.getClass().getSimpleName());
+            return true;
+        }
+    }
+
+    static boolean isMobileSessionExpired(String html) {
+        if (html == null || html.isEmpty()) {
+            return false;
+        }
+        String lower = html.toLowerCase(java.util.Locale.US);
+        if (lower.contains("/user/logout")) {
+            return false;
+        }
+        return lower.contains("/user/login")
+                && (lower.contains("name=\"passwd\"") || lower.contains("name='passwd'"));
     }
 
     private static UserStatus userStatusFromCookie() {
