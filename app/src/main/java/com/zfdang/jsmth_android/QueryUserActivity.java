@@ -2,6 +2,7 @@ package com.zfdang.jsmth_android;
 
 import android.content.Intent;
 import android.os.Bundle;
+import android.text.TextUtils;
 import androidx.appcompat.widget.Toolbar;
 import android.util.Log;
 import android.view.Menu;
@@ -185,6 +186,10 @@ public class QueryUserActivity extends SMTHBaseActivity {
 
             if (user.getFace_url() != null && user.getFace_url().length() > 10) {
               mImageView.setImageFromStringURL(user.getFace_url());
+              if (SMTHApplication.isValidUser() && TextUtils.equals(user.getId(), SMTHApplication.activeUser.getId())) {
+                SMTHApplication.activeUser.setFace_url(user.getFace_url());
+                Settings.getInstance().setFaceURL(user.getFace_url());
+              }
             }
             dismissProgress();
 

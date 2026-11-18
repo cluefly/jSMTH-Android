@@ -104,6 +104,23 @@ public class Settings {
     }
   }
 
+  // user avatar face URL
+  private static final String FACE_URL = "face_url";
+  private String mFaceURL;
+
+  public String getFaceURL() {
+    return mFaceURL;
+  }
+
+  public void setFaceURL(String mFaceURL) {
+    if (this.mFaceURL == null || !this.mFaceURL.equals(mFaceURL)) {
+      this.mFaceURL = mFaceURL;
+      mEditor.putString(FACE_URL, this.mFaceURL);
+      mEditor.commit();
+    }
+  }
+
+
 
   // use device signature or not
   private static final String USE_DEVICE_SIGNATURE = "use_device_signature";
@@ -521,5 +538,6 @@ public class Settings {
     iFontIndex = mPreference.getInt(ZSMTH_FONT_INDEX, 1);
 
     mPostCache = mPreference.getString(COMPOSE_POST_CACHE, "");
+    mFaceURL = mPreference.getString(FACE_URL, "");
   }
 }

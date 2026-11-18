@@ -325,7 +325,7 @@ public class MyPreferenceFragment extends PreferenceFragmentCompat {
     app_version = findPreference("setting_app_version");
     app_version.setOnPreferenceClickListener(new Preference.OnPreferenceClickListener() {
       @Override public boolean onPreferenceClick(Preference preference) {
-        ActivityUtils.openLink("http://zsmth.zfdang.com/release.html", getActivity());
+        ActivityUtils.openLink("https://github.com/cluefly/jSMTH-Android/releases", getActivity());
         return true;
       }
     });

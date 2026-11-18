@@ -95,16 +95,8 @@ public class MaintainUserStatusWorker extends Worker {
                 if (userStatus == null) {
                     userStatus = new UserStatus();
                 }
-
-                // ajax_session may return guest even after WebView login.
-                if (userStatus.getId() == null || TextUtils.equals(userStatus.getId(), "guest")) {
-                    String cookieId = WebviewCookieHandler.readLoginUserId();
-                    if (cookieId != null) {
-                        userStatus.setId(cookieId);
-                        userStatus.setIs_login(true);
-                    } else if (userStatus.getId() == null) {
-                        userStatus.setId("guest");
-                    }
+                if (userStatus.getId() == null) {
+                    userStatus.setId("guest");
                 }
 
                 //Log.d(TAG, "call: " + "2.2 user not logined, try to login now...");
@@ -194,17 +186,23 @@ public class MaintainUserStatusWorker extends Worker {
                 //Log.d(TAG, "3.0 call: " + userStatus.toString());
                 if (!TextUtils.equals(userStatus.getId(), "guest")) {
                     // valid user
+                    String cachedFaceUrl = null;
                     if (SMTHApplication.activeUser != null && TextUtils.equals(userStatus.getId(), SMTHApplication.activeUser.getId())) {
-                        // current user is already cached in SMTHApplication
-                        //Log.d(TAG, "call: " + "3.1 New user is the same with cached user, copy faceURL from local");
-                        userStatus.setFace_url(SMTHApplication.activeUser.getFace_url());
+                        cachedFaceUrl = SMTHApplication.activeUser.getFace_url();
+                    }
+                    if (cachedFaceUrl == null || cachedFaceUrl.isEmpty()) {
+                        cachedFaceUrl = Settings.getInstance().getFaceURL();
+                    }
+
+                    if (cachedFaceUrl != null && !cachedFaceUrl.isEmpty()) {
+                        userStatus.setFace_url(cachedFaceUrl);
                     } else {
-                        // get correct faceURL
-                        //Log.d(TAG, "call: " + "3.2 New user is different with cached user, get real face URL from remote");
+                        // get correct faceURL from remote
                         try {
                             UserInfo userInfo = helper.wService.queryUserInformation(userStatus.getId()).blockingFirst();
-                            if (userInfo != null) {
+                            if (userInfo != null && userInfo.getFace_url() != null && !userInfo.getFace_url().isEmpty()) {
                                 userStatus.setFace_url(userInfo.getFace_url());
+                                Settings.getInstance().setFaceURL(userInfo.getFace_url());
                             }
                         } catch (Exception faceError) {
                             Log.w(TAG, "face lookup skipped: " + faceError.getClass().getSimpleName());
@@ -225,6 +223,9 @@ public class MaintainUserStatusWorker extends Worker {
                     // active user is null, or active user is different with userstatus, update the icon
                     // Log.d(TAG, "onNext: " + "4.1 cache userStatus as activeUser");
                     updateUserIcon = true;
+                } else if (userStatus.getFace_url() != null && !userStatus.getFace_url().isEmpty()
+                        && (SMTHApplication.activeUser == null || !TextUtils.equals(userStatus.getFace_url(), SMTHApplication.activeUser.getFace_url()))) {
+                    updateUserIcon = true;
                 }
                 SMTHApplication.activeUser = userStatus;
 
@@ -232,9 +233,17 @@ public class MaintainUserStatusWorker extends Worker {
                 if (SMTHApplication.isValidUser()) {
                     // get message if user is valid user
                     message = getNotificationMessage(SMTHApplication.activeUser);
-                } else if (updateUserIcon == true) {
-                    // not a valid user, but updateUserIcon is true, means login status has lost
-                    message = SMTHApplication.NOTIFICATION_LOGIN_LOST;
+                } else {
+                    if (Settings.getInstance().isUserOnline()) {
+                        Settings.getInstance().setUserOnline(false);
+                    }
+                    if (WebviewCookieHandler.readLoginUserId() != null) {
+                        WebviewCookieHandler.clearLoginCookies();
+                    }
+                    if (updateUserIcon == true) {
+                        // not a valid user, but updateUserIcon is true, means login status has lost
+                        message = SMTHApplication.NOTIFICATION_LOGIN_LOST;
+                    }
                 }
 
                 UserStatusReceiver receiver = SMTHApplication.mUserStatusReceiver;

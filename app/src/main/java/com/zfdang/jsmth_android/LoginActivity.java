@@ -125,6 +125,7 @@ public class LoginActivity extends SMTHBaseActivity implements OnClickListener {
           }
 
           // continue to login with nforum web
+          WebviewCookieHandler.clearLoginCookies();
           Intent intent = new Intent(this, WebviewLoginActivity.class);
           intent.putExtra(USERNAME, username);
           intent.putExtra(PASSWORD, password);
@@ -173,6 +174,7 @@ public class LoginActivity extends SMTHBaseActivity implements OnClickListener {
     // http://gank.io/post/560e15be2dca930e00da1083
     SMTHHelper helper = SMTHHelper.getInstance();
     // clear cookies upon login
+    WebviewCookieHandler.clearLoginCookies();
     final String cookieDays = "2";
     helper.wService.login(username, password, cookieDays)
             .subscribeOn(Schedulers.io())

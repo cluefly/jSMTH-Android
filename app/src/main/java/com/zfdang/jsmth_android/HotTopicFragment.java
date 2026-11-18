@@ -24,8 +24,6 @@ import com.zfdang.jsmth_android.listeners.OnVolumeUpDownListener;
 import com.zfdang.jsmth_android.models.Topic;
 import com.zfdang.jsmth_android.models.TopicListContent;
 import com.zfdang.jsmth_android.newsmth.SMTHHelper;
-import io.reactivex.Observable;
-import io.reactivex.ObservableSource;
 import io.reactivex.Observer;
 import io.reactivex.android.schedulers.AndroidSchedulers;
 import io.reactivex.annotations.NonNull;
@@ -50,6 +48,7 @@ public class HotTopicFragment extends Fragment implements OnVolumeUpDownListener
   private RecyclerView mRecyclerView = null;
   private SmartRefreshLayout mRefreshLayout = null;
   private final io.reactivex.disposables.CompositeDisposable mDisposable = new io.reactivex.disposables.CompositeDisposable();
+  private boolean mIsRefreshing = false;
 
   /**
    * Mandatory empty constructor for the fragment manager to instantiate the
@@ -95,10 +94,14 @@ public class HotTopicFragment extends Fragment implements OnVolumeUpDownListener
 
     getActivity().setTitle(SMTHApplication.App_Title_Prefix + "首页导读");
 
-    if (TopicListContent.HOT_TOPICS.size() == 0) {
-      RefreshGuidance();
-    }
     return rootView;
+  }
+
+  @Override public void onResume() {
+    super.onResume();
+    if (isAdded() && !isHidden()) {
+      RefreshGuidanceFromWWW(true);
+    }
   }
 
   public void showLoadingHints() {
@@ -114,58 +117,71 @@ public class HotTopicFragment extends Fragment implements OnVolumeUpDownListener
     }
 
     // disable SmartFreshLayout
-    if(mRefreshLayout.isRefreshing()) {
+    if (mRefreshLayout != null && mRefreshLayout.isRefreshing()) {
       mRefreshLayout.finishRefresh(100);
     }
   }
 
   public void RefreshGuidance() {
-    // called by onCreate & refresh menu item
+    // called by refresh menu item
     showLoadingHints();
-    RefreshGuidanceFromWWW();
+    RefreshGuidanceFromWWW(false);
   }
 
   public void RefreshGuidanceFromWWW() {
+    RefreshGuidanceFromWWW(false);
+  }
+
+  private void RefreshGuidanceFromWWW(final boolean silent) {
+    if (mIsRefreshing) {
+      return;
+    }
+    mIsRefreshing = true;
     final SMTHHelper helper = SMTHHelper.getInstance();
 
-    helper.wService.getAllHotTopics().flatMap(new Function<ResponseBody, ObservableSource<Topic>>() {
-      @Override public ObservableSource<Topic> apply(@NonNull ResponseBody responseBody) throws Exception {
-        try {
-          String response = responseBody.string();
-          List<Topic> results = SMTHHelper.ParseHotTopicsFromWWW(response);
-          return Observable.fromIterable(results);
-        } catch (Exception e) {
-          Log.d(TAG, Log.getStackTraceString(e));
-          return Observable.error(e);
-        }
+    helper.wService.getAllHotTopics().map(new Function<ResponseBody, List<Topic>>() {
+      @Override public List<Topic> apply(@NonNull ResponseBody responseBody) throws Exception {
+        String response = responseBody.string();
+        return SMTHHelper.ParseHotTopicsFromWWW(response);
       }
-    }).subscribeOn(Schedulers.computation()).observeOn(AndroidSchedulers.mainThread()).subscribe(new Observer<Topic>() {
+    }).subscribeOn(Schedulers.io()).observeOn(AndroidSchedulers.mainThread()).subscribe(new Observer<List<Topic>>() {
       @Override public void onSubscribe(@NonNull Disposable disposable) {
         mDisposable.add(disposable);
-        // clearHotTopics current hot topics
-        TopicListContent.clearHotTopics();
-        mRecyclerView.getAdapter().notifyDataSetChanged();
       }
 
-      @Override public void onNext(@NonNull Topic topic) {
-        //                        Log.d(TAG, topic.toString());
-        TopicListContent.addHotTopic(topic);
-        mRecyclerView.getAdapter().notifyItemInserted(TopicListContent.HOT_TOPICS.size() - 1);
+      @Override public void onNext(@NonNull List<Topic> topics) {
+        TopicListContent.clearHotTopics();
+        if (topics != null) {
+          TopicListContent.HOT_TOPICS.addAll(topics);
+        }
+        TopicListContent.addHotTopic(new Topic("-- END --"));
+        if (mRecyclerView != null && mRecyclerView.getAdapter() != null) {
+          mRecyclerView.getAdapter().notifyDataSetChanged();
+        }
       }
 
       @Override public void onError(@NonNull Throwable e) {
+        mIsRefreshing = false;
         clearLoadingHints();
-        Toast.makeText(SMTHApplication.getAppContext(), "获取热帖失败!\n" + e.toString(), Toast.LENGTH_LONG).show();
+        Log.w(TAG, "RefreshGuidanceFromWWW failed", e);
+        if (!silent || TopicListContent.HOT_TOPICS.isEmpty()) {
+          Toast.makeText(SMTHApplication.getAppContext(), "获取热帖失败!\n" + e.toString(), Toast.LENGTH_LONG).show();
+        }
       }
 
       @Override public void onComplete() {
-        Topic topic = new Topic("-- END --");
-        TopicListContent.addHotTopic(topic);
-        mRecyclerView.getAdapter().notifyItemInserted(TopicListContent.HOT_TOPICS.size() - 1);
-
+        mIsRefreshing = false;
         clearLoadingHints();
       }
     });
+  }
+
+  @Override public void onDestroyView() {
+    mDisposable.clear();
+    mIsRefreshing = false;
+    mRecyclerView = null;
+    mRefreshLayout = null;
+    super.onDestroyView();
   }
 
   // http://stackoverflow.com/questions/32604552/onattach-not-called-in-fragment

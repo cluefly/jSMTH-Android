@@ -61,6 +61,7 @@ import com.zfdang.jsmth_android.models.MailListContent;
 import com.zfdang.jsmth_android.models.Topic;
 import com.zfdang.jsmth_android.newsmth.AjaxResponse;
 import com.zfdang.jsmth_android.newsmth.SMTHHelper;
+import com.zfdang.jsmth_android.newsmth.UserInfo;
 import com.zfdang.jsmth_android.newsmth.UserStatus;
 import com.zfdang.jsmth_android.services.KeepAliveService;
 import com.zfdang.jsmth_android.services.MaintainUserStatusWorker;
@@ -105,6 +106,8 @@ public class MainActivity extends SMTHBaseActivity
   private NavigationView mNavigationView;
 
   private static final int notificationID = 273;
+  private static final long RESUME_STATUS_CHECK_INTERVAL_MS = 30_000L;
+  private long mLastStatusCheckMs = 0L;
 
   @Override protected void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
@@ -221,9 +224,9 @@ public class MainActivity extends SMTHBaseActivity
     SubActionButton.Builder itemBuilder = new SubActionButton.Builder(this);
 
     ImageView itemIcon1 = new ImageView(this);
-    itemIcon1.setImageDrawable(ResourcesCompat.getDrawable(getResources(), R.drawable.ic_whatshot_white_48dp, null));
+    itemIcon1.setImageDrawable(ResourcesCompat.getDrawable(getResources(), R.drawable.ic_hot_flame_48dp, null));
     SubActionButton button1 = itemBuilder.setContentView(itemIcon1)
-        .setBackgroundDrawable(ResourcesCompat.getDrawable(getResources(), R.drawable.navigation_button_background, null))
+        .setBackgroundDrawable(ResourcesCompat.getDrawable(getResources(), R.drawable.navigation_button_hot_background, null))
         .build();
     button1.setOnClickListener(new View.OnClickListener() {
       @Override public void onClick(View v) {
@@ -280,8 +283,17 @@ public class MainActivity extends SMTHBaseActivity
         .build();
   }
 
+  @Override protected void onResume() {
+    super.onResume();
+    if (SMTHApplication.isValidUser()
+        && android.os.SystemClock.elapsedRealtime() - mLastStatusCheckMs >= RESUME_STATUS_CHECK_INTERVAL_MS) {
+      updateUserStatusNow();
+    }
+  }
+
   // triger the background service right now
   private void updateUserStatusNow() {
+    mLastStatusCheckMs = android.os.SystemClock.elapsedRealtime();
     // run worker immediately for once
     WorkRequest userStatusWorkRequest =
             new OneTimeWorkRequest.Builder(MaintainUserStatusWorker.class).build();
@@ -310,10 +322,7 @@ public class MainActivity extends SMTHBaseActivity
         KeepAliveService.stop(MainActivity.this);
         SMTHApplication.activeUser = null;
         SMTHApplication.displayedUserId = "guest";
-        runOnUiThread(() -> {
-          mUsername.setText(getString(R.string.nav_header_click_to_login));
-          mAvatar.setImageResource(R.drawable.ic_person_black_48dp);
-        });
+        runOnUiThread(() -> UpdateNavigationViewHeader());
       }
     });
     SMTHApplication.mUserStatusReceiver = mReceiver;
@@ -455,6 +464,10 @@ public class MainActivity extends SMTHBaseActivity
           UserStatus status = new UserStatus();
           status.setId(id);
           status.setIs_login(true);
+          String cachedFaceUrl = Settings.getInstance().getFaceURL();
+          if (cachedFaceUrl != null && !cachedFaceUrl.isEmpty()) {
+            status.setFace_url(cachedFaceUrl);
+          }
           SMTHApplication.activeUser = status;
           UpdateNavigationViewHeader();
         } else {
@@ -485,11 +498,21 @@ public class MainActivity extends SMTHBaseActivity
       return;
     }
     if (SMTHApplication.isValidUser() && id.equals(SMTHApplication.activeUser.getId())) {
+      if (SMTHApplication.activeUser.getFace_url() == null || SMTHApplication.activeUser.getFace_url().isEmpty()) {
+        String cachedFace = Settings.getInstance().getFaceURL();
+        if (cachedFace != null && !cachedFace.isEmpty()) {
+          SMTHApplication.activeUser.setFace_url(cachedFace);
+        }
+      }
       return;
     }
     UserStatus status = new UserStatus();
     status.setId(id);
     status.setIs_login(true);
+    String cachedFace = Settings.getInstance().getFaceURL();
+    if (cachedFace != null && !cachedFace.isEmpty()) {
+      status.setFace_url(cachedFace);
+    }
     SMTHApplication.activeUser = status;
   }
 
@@ -500,10 +523,44 @@ public class MainActivity extends SMTHBaseActivity
 
     if (SMTHApplication.isValidUser()) {
       // update user to logined user
-      mUsername.setText(SMTHApplication.activeUser.getId());
+      final String userId = SMTHApplication.activeUser.getId();
+      mUsername.setText(userId);
       String faceURL = SMTHApplication.activeUser.getFace_url();
-      if (faceURL != null) {
+      if (faceURL == null || faceURL.isEmpty()) {
+        faceURL = Settings.getInstance().getFaceURL();
+        if (faceURL != null && !faceURL.isEmpty()) {
+          SMTHApplication.activeUser.setFace_url(faceURL);
+        }
+      }
+      if (faceURL != null && !faceURL.isEmpty()) {
         mAvatar.setImageFromStringURL(faceURL);
+      } else {
+        mAvatar.setImageResource(R.drawable.ic_person_black_48dp);
+        // asynchronously fetch user face url if not yet cached
+        SMTHHelper.getInstance().wService.queryUserInformation(userId)
+            .subscribeOn(Schedulers.io())
+            .observeOn(AndroidSchedulers.mainThread())
+            .subscribe(new Observer<UserInfo>() {
+              @Override public void onSubscribe(@NonNull Disposable disposable) {
+                mDisposable.add(disposable);
+              }
+
+              @Override public void onNext(@NonNull UserInfo userInfo) {
+                if (userInfo != null && userInfo.getFace_url() != null && !userInfo.getFace_url().isEmpty()) {
+                  if (SMTHApplication.isValidUser() && TextUtils.equals(userId, SMTHApplication.activeUser.getId())) {
+                    SMTHApplication.activeUser.setFace_url(userInfo.getFace_url());
+                    Settings.getInstance().setFaceURL(userInfo.getFace_url());
+                    mAvatar.setImageFromStringURL(userInfo.getFace_url());
+                  }
+                }
+              }
+
+              @Override public void onError(@NonNull Throwable e) {
+                Log.w(TAG, "fetch avatar failed: " + e.getMessage());
+              }
+
+              @Override public void onComplete() {}
+            });
       }
       SMTHApplication.displayedUserId = SMTHApplication.activeUser.getId();
       init_keep_alive_service();
@@ -654,9 +711,11 @@ public class MainActivity extends SMTHBaseActivity
   public void onLogout() {
     Settings.getInstance().setUserOnline(false);
     Settings.getInstance().setLastLoginSuccess(false);
+    Settings.getInstance().setFaceURL("");
     WebviewCookieHandler.clearLoginCookies();
     if (SMTHApplication.activeUser != null) {
       SMTHApplication.activeUser.setId("guest");
+      SMTHApplication.activeUser.setFace_url(null);
     }
     UpdateNavigationViewHeader();
 

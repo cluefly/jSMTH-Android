@@ -27,7 +27,7 @@
   <string name="login_label_signin">登录</string>
   <string name="login_label_saveinfo">保存登录信息</string>
   <string name="login_register_link">Sign in with an existing NewSMTH account</string>
-  <string name="login_asm_help">jSMTH  <a href="http://zsmth.zfdang.com/">使用说明</a></string>
+  <string name="login_asm_help">jSMTH  <a href="https://github.com/cluefly/jSMTH-Android">使用说明</a></string>
 
   <!-- 导读页 -->
   <string name="guidance_label_board">版面:</string>
@@ -95,7 +95,7 @@
   <!--About fragment-->
   <string name="aboutLibraries_description_showIcon">true</string>
   <string name="aboutLibraries_description_showVersion">true</string>
-  <string name="aboutLibraries_description_text"><![CDATA[ jSMTH是水木社区BBS的一款开源Android客户端 <br /><A href="http://zsmth.zfdang.com/">http://zsmth.zfdang.com/</A><br />© 2022 zfdang ]]></string>
+  <string name="aboutLibraries_description_text"><![CDATA[ jSMTH是水木社区BBS的一款开源Android客户端 <br /><A href="https://github.com/cluefly/jSMTH-Android">https://github.com/cluefly/jSMTH-Android</A><br />© 2022 zfdang ]]></string>
   <string name="search_author_label">请输入作者ID</string>
   <string name="search_keyword_label">请输入关键字</string>
   <string name="search_attachment_label">带附件</string>
@@ -141,7 +141,7 @@
 
   <!-- 关于 -->
   <string name="about_title">关于jSMTH</string>
-  <string name="about_content" formatted="false">版本: %s (%d).\njSMTH-Android是水木社区BBS的开源Android客户端。\n\n1.在帖子内容处，长按将弹出‘回复’等操作菜单！\n2.点击十大帖子右上角的图标可跳至对应版面\n3.邮件左划删除\n4.使用保存图片的功能，需要在系统设置里授予jSMTH读写存储的权限。\n\n获取更新和使用说明:\nhttp://zsmth.zfdang.com/\n\nby zfdang.</string>
+  <string name="about_content" formatted="false">版本: %s (%d).\njSMTH-Android是水木社区BBS的开源Android客户端。\n\n1.在帖子内容处，长按将弹出‘回复’等操作菜单！\n2.在帖子详情页点击右上角图标可跳至对应版面\n3.邮件左划删除\n4.使用保存图片的功能，需要在系统设置里授予jSMTH读写存储的权限。\n\n获取更新和使用说明:\nhttps://github.com/cluefly/jSMTH-Android\n\nby zfdang.</string>
   <string name="about_close">关闭</string>
   <string name="mail_content_menu_open_post">打开原贴</string>
   <string name="mail_content_title">加载中...</string>
@@ -151,7 +151,7 @@
   <string name="child_safety_identity">jSMTH is an independently developed third-party client by zfdang, not the official NewSMTH forum app. Forum accounts, posts and private messages are managed by the forum operator.</string>
   <string name="child_safety_prohibition">This client prohibits child sexual abuse and exploitation (CSAE), including CSAM, grooming, sexualization of minors, sexual extortion and soliciting or distributing such material.</string>
   <string name="child_safety_handling">Report forum content to administrator sysop using private messages inside this app. The forum operator reviews reports and controls server-side moderation. The client developer cannot delete server posts or ban forum accounts. On receiving child safety notifications, the developer reviews client-related issues and reports to competent authorities and cooperates as required by applicable law.</string>
-  <string name="child_safety_contact">Client child safety contact: zfdang\nEmail: me@zfdang.com\nForum content reports: sysop\nPublished standards: https://zsmth.zfdang.com/child-safety.html</string>
+  <string name="child_safety_contact">Client child safety contact: zfdang\nEmail: me@zfdang.com\nForum content reports: sysop\nPublished standards: https://github.com/cluefly/jSMTH-Android/blob/main/docs/child-safety.html</string>
   <string name="child_safety_report_action">Report to Forum Administrator</string>
   <string name="child_safety_report_notice">Your report will be sent as a NewSMTH private message to administrator sysop for forum moderation. Include the post URL, board, author ID, time and concern. Do not download, forward or attach illegal images or videos, or provide unnecessary personal information. Review your report before sending.</string>
   <string name="child_safety_login_required">Sign in to your NewSMTH account to send a private message to sysop. Sign-in and reporting stay inside this app. Standards and contact information are available without signing in.</string>
